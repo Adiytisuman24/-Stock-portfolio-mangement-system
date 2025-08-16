@@ -1,0 +1,88 @@
+
+services:
+  postgres:
+    image: postgres:16
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/sql/init.sql:/docker-entrypoint-initdb.d/1-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  airflow-webserver:
+    build: ./backend/airflow
+    env_file: .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
+      YAHOO_FINANCE_API_KEY: ${YAHOO_FINANCE_API_KEY}
+      APIFY_API_TOKEN: ${APIFY_API_TOKEN}
+      APIFY_ACTOR_ID: ${APIFY_ACTOR_ID}
+      POSTGRES_HOST: postgres
+      STOCKS_DB: ${POSTGRES_DB}
+      SYMBOLS: ${SYMBOLS}
+      FREQUENCY: ${FREQUENCY}
+    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    volumes:
+      - ./backend/airflow/dags:/opt/airflow/dags
+      - ./backend/airflow/app:/opt/airflow/app
+      - airflow_logs:/opt/airflow/logs
+    command: webserver
+    ports: ["8081:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  airflow-scheduler:
+    build: ./backend/airflow
+    env_file: .env
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+    user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
+    volumes:
+      - ./backend/airflow/dags:/opt/airflow/dags
+      - ./backend/airflow/app:/opt/airflow/app
+      - airflow_logs:/opt/airflow/logs
+    command: scheduler
+    depends_on:
+      airflow-webserver: { condition: service_started }
+
+  go-service:
+    build: ./backend/go-service
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: ${POSTGRES_PORT}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  frontend:
+    image: node:20
+    working_dir: /app
+    env_file: .env
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8080
+    volumes:
+      - ./frontend:/app
+    command: sh -c "npm install && npm run dev"
+    ports: ["3000:3000"]
+    depends_on:
+      go-service: { condition: service_started }
+
+volumes:
+  pgdata:
+  airflow_logs:
